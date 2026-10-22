@@ -1,0 +1,2 @@
+# Mipped-rendering
+mip rendering
