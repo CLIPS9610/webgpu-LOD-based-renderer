@@ -1,7 +1,7 @@
 import {vec3, mat3, vec4, mat4} from 'wgpu-matrix';
 import Stats from 'stats.js'
-import { lodChunk } from './mesh.js'
-import { createFPSCamera } from './3DMath.js';
+import { lodChunk, lodChunk2, chunkSet } from './mesh.js'
+import { createFPSCamera, isAABBInView } from './3DMath.js';
 import { initiateGPU } from './gpuSetup.js';
 
 const canvas = document.getElementById("canvas")
@@ -97,12 +97,12 @@ device.queue.writeBuffer(vertexBuffer, 0, vertexData);
 
 const instanceBuffer = device.createBuffer({
   label: "Instance Buffer",
-  size: 32*32*32*4*6*4,
+  size: 32*32*32*4*6*8*8,
   usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
 });
 
 const numObjects = 100;
-const uniformSize = 64; // e.g., a 4x4 float32 matrix (16 * 4 bytes)
+const uniformSize = 16; // e.g., a 4x4 float32 matrix (16 * 4 bytes)
 
 // Query hardware alignment (usually 256 bytes)
 const alignment = device.limits.minUniformBufferOffsetAlignment;
@@ -317,7 +317,39 @@ const fullScreenQuadRenderPassDescriptor = {
   ],
 };
 
+  const data = new Float32Array((alignedStride / 4) * numObjects);
+  
+
+for (let i = 0; i < chunkSet.chunks.length; i++) {
+  const floatOffset = (i * alignedStride) / 4;
+  data[floatOffset] = chunkSet.chunks[i].position.x
+  data[floatOffset + 1] = chunkSet.chunks[i].position.y
+  data[floatOffset + 2] = chunkSet.chunks[i].position.z
+
+   for(let j = 0; j<chunkSet.chunks[i].instanceArray.length; j++){
+
+      device.queue.writeBuffer(instanceBuffer, chunkSet.chunks[i].lodOffsets[j] * 4 + chunkSet.offsets[i] * 4, chunkSet.chunks[i].instanceArray[j],0,chunkSet.chunks[i].quadCounts[j]);
+
+    }
+   
+  // Write 16 floats for object i's transform matrix at data[floatOffset ... floatOffset + 15]
+}
+
+//alert(chunkSet.chunks[0].lodOffsets[1] )
+ for(let j = 0; j<chunkSet.chunks[0].instanceArray.length; j++){
+
+      //device.queue.writeBuffer(instanceBuffer, chunkSet.chunks[0].lodOffsets[j] * 4, chunkSet.chunks[0].instanceArray[j],0,chunkSet.chunks[0].quadCounts[j]);
+
+    }
+
+
+device.queue.writeBuffer(uniformBuffer, 0, data);
+
+let dt = 0
+
 function render(){
+
+  dt++;
 
   if (MSSAA > 1) {
     renderPassDescriptor.colorAttachments[0].view = msaaTexture.createView();
@@ -327,16 +359,6 @@ function render(){
     renderPassDescriptor.colorAttachments[0].resolveTarget = undefined;
   }
 
-  const data = new Float32Array((alignedStride / 4) * numObjects);
-  let objPos = [{x:0,y:0,z:0},{x:32,y:0,z:0}]
-for (let i = 0; i < objPos.length; i++) {
-  const floatOffset = (i * alignedStride) / 4;
-  data[floatOffset] = objPos[i].x
-  data[floatOffset + 1] = objPos[i].y
-  data[floatOffset + 2] = objPos[i].z
-  // Write 16 floats for object i's transform matrix at data[floatOffset ... floatOffset + 15]
-}
-device.queue.writeBuffer(uniformBuffer, 0, data);
 
   const { view, projection } = camera.update(0.03);
   const viewProj = mat4.mul(projection,view);
@@ -356,54 +378,61 @@ device.queue.writeBuffer(uniformBuffer, 0, data);
 
   device.queue.writeBuffer(cameraBuffer, 0, cameraBufferData)
 
-  chunkUniformsData[0] = 0;
-  chunkUniformsData[1] = 0;
-  chunkUniformsData[2] = 0;
+  const axisScale = 16
+  const distanceScale = 32
 
-  device.queue.writeBuffer(chunkUniforms,0, chunkUniformsData)
-
-
-  let distance = Math.sqrt(
-    Math.pow(cameraPos[0] - chunkUniformsData[0] - 16, 2) + 
-    Math.pow(cameraPos[1] - chunkUniformsData[1] - 16, 2) + 
-    Math.pow(cameraPos[2] - chunkUniformsData[2] - 16, 2)
-  );
-
-  let usedLOD = {
-    x:Math.floor(Math.max(Math.log2(distance/64 + Math.abs(cameraPos[0] - chunkUniformsData[0] - 16)/16),0)),
-    y:Math.floor(Math.max(Math.log2(distance/64 + Math.abs(cameraPos[1] - chunkUniformsData[1] - 16)/16),0)),
-    z:Math.floor(Math.max(Math.log2(distance/64 + Math.abs(cameraPos[2] - chunkUniformsData[2] - 16)/16),0))
-  }
-
-  usedLOD.x = Math.min(usedLOD.x,lodChunk.LODCount.x-1)
-  usedLOD.y = Math.min(usedLOD.y,lodChunk.LODCount.y-1)
-  usedLOD.z = Math.min(usedLOD.z,lodChunk.LODCount.z-1)
-
-  let fillRate = 1/( 2 * 2 * 2 )
+  const rewriteFunc = ( i , arrayElement) => {
 
 
-  let instanceSet = lodChunk.getIndex({x:0,y:0,z:0}, usedLOD)
+
+
+    
+    
+    //device.queue.writeBuffer(instanceBuffer,chunkSet.offsets[i] * 4, chunkSet.chunks[i].instanceArray[0],0,chunkSet.chunks[i].quadCounts[0]);
   
-  if(!lodChunk.updateList[instanceSet.arrayElement]){
-      
-    lodChunk.updateLOD(usedLOD, fillRate)
-    lodChunk.updateInstanceData(usedLOD)
-    lodChunk.updateList[instanceSet.arrayElement] = true
-    //alert("updated")
   }
 
-  device.queue.writeBuffer(instanceBuffer,0, lodChunk.instanceArray[instanceSet.arrayElement]);
+  let LODS  = chunkSet.writeLODS(cameraPos, 1/64,axisScale,distanceScale,rewriteFunc)
 
   const commandEncoder = device.createCommandEncoder();
   const textureView = context.getCurrentTexture().createView();
 
   const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-  passEncoder.setBindGroup(0, renderBindGroup, new Uint32Array([0 * alignedStride]));
-  passEncoder.setVertexBuffer(0, vertexBuffer);
-  passEncoder.setVertexBuffer(1, instanceBuffer);
-  passEncoder.setPipeline(renderPipeline);
-  passEncoder.draw(6, lodChunk.quadCounts[instanceSet.arrayElement], 0, 0);
 
+  let p  =1*2+5*2+25*2
+  const drawFunc = i =>{
+
+    let upperBounds = [
+      chunkSet.chunks[i].position.x + chunkSet.chunks[i].size.x, 
+      chunkSet.chunks[i].position.y + chunkSet.chunks[i].size.y,
+      chunkSet.chunks[i].position.z + chunkSet.chunks[i].size.z]
+  if(isAABBInView(camera, Object.values(chunkSet.chunks[i].position), upperBounds) || true){
+    passEncoder.setBindGroup(0, renderBindGroup, new Uint32Array([i * alignedStride]));
+    passEncoder.setVertexBuffer(0, vertexBuffer);
+    passEncoder.setVertexBuffer(1, instanceBuffer);
+    passEncoder.setPipeline(renderPipeline);
+    passEncoder.draw(6, chunkSet.chunks[i].quadCounts[LODS[i]], 0, chunkSet.offsets[i] + chunkSet.chunks[i].lodOffsets[LODS[i]]);
+    //passEncoder.draw(6, chunkSet.chunks[0].quadCounts[p], 0, 0 + chunkSet.chunks[0].lodOffsets[p]);
+
+  }else{
+
+    if(dt%60==0){
+
+    //alert("outofview " + i)
+    }
+
+  }
+
+  }
+
+  if(dt%60==0){
+
+    //console.log(chunkSet.chunks[0].lodOffsets)
+  }
+
+  chunkSet.encodeDrawCall(LODS, drawFunc)
+
+  
 
   passEncoder.end();
 

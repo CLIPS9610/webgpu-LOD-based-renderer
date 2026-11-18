@@ -91,3 +91,27 @@ export function createFPSCamera(canvas,near = 1.0, maxDis = 40, userControlled =
   
   return camera;
 }
+
+export function isAABBInView(camera, min, max) {
+  const viewProjection = mat4.multiply(camera.projection, camera.view);
+  const outside = [true, true, true, true, true, true];
+
+  for (let i = 0; i < 8; i++) {
+    const x = i & 1 ? max[0] : min[0];
+    const y = i & 2 ? max[1] : min[1];
+    const z = i & 4 ? max[2] : min[2];
+    const clip = vec4.transformMat4([x, y, z, 1], viewProjection);
+    const [cx, cy, cz, w] = clip;
+
+    // WebGPU clip space: x/y in [-w, w], z in [0, w].
+    if (cx >= -w) outside[0] = false; // left
+    if (cx <=  w) outside[1] = false; // right
+    if (cy >= -w) outside[2] = false; // bottom
+    if (cy <=  w) outside[3] = false; // top
+    if (cz >=  0) outside[4] = false; // near
+    if (cz <=  w) outside[5] = false; // far
+  }
+
+  // Cull only if every corner is outside the same frustum plane.
+  return !outside.some(Boolean);
+}

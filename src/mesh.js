@@ -185,6 +185,9 @@ class LODChunk {
     this.instanceArray =  new Array(this.LODConfigs)
     this.quadCounts = new Array(this.LODConfigs)
     this.updateList = new Array(this.LODConfigs)
+    this.changeList = new Array(this.LODConfigs)
+    this.renderLOD = {x:0,y:0,z:0};
+    this.lodOffsets = new Array(this.LODConfigs).fill(0)
 
     let i = 0
     for(let x = 0; x< this.LODCount.x; x++){
@@ -418,36 +421,108 @@ class LODChunk {
       }
     }
     this.quadCounts[lodIndex] = count;
+    this.lodOffsets[0] = 0;
+
+    for(let i = 1; i< this.lodOffsets.length; i++){
+      //let total = this.quadCounts[i - 1] ? this.quadCounts[i - 1] : 0 
+      this.lodOffsets[i] = this.lodOffsets[i - 1] + this.quadCounts[i - 1];
+
+    }
   }
 
-  updateLODSByPosition(position){
+  updateLODSByPosition(position, fillRate, axisScale = 16, distanceScale = 64){
+
 
     let distance = Math.sqrt(
-    Math.pow(position[0] - this.position.x - 16, 2) + 
-    Math.pow(position[1] - this.position.y - 16, 2) + 
-    Math.pow(position[2] - this.position.z - 16, 2)
+    Math.pow(position[0] - this.position.x - this.size.x/2, 2) + 
+    Math.pow(position[1] - this.position.y - this.size.y/2, 2) + 
+    Math.pow(position[2] - this.position.z - this.size.z/2, 2)
   );
 
   let usedLOD = {
-    x:Math.floor(Math.max(Math.log2(distance/64 + Math.abs(position[0] - this.position.x - 16)/16),0)),
-    y:Math.floor(Math.max(Math.log2(distance/64 + Math.abs(position[1] - this.position.y - 16)/16),0)),
-    z:Math.floor(Math.max(Math.log2(distance/64 + Math.abs(position[2] - this.position.z - 16)/16),0))
+    x:Math.floor(Math.max(Math.log2(distance/distanceScale + Math.abs(position[0] - this.position.x - this.size.x/2)/axisScale),0)),
+    y:Math.floor(Math.max(Math.log2(distance/distanceScale + Math.abs(position[1] - this.position.y - this.size.y/2)/axisScale),0)),
+    z:Math.floor(Math.max(Math.log2(distance/distanceScale + Math.abs(position[2] - this.position.z - this.size.z/2)/axisScale),0))
   }
+
+  //usedLOD = {x:0,y:0,z:0}
+
 
   usedLOD.x = Math.min(usedLOD.x,this.LODCount.x-1)
   usedLOD.y = Math.min(usedLOD.y,this.LODCount.y-1)
   usedLOD.z = Math.min(usedLOD.z,this.LODCount.z-1)
 
-  if(!lodChunk.updateList[instanceSet.arrayElement]){
+    let instanceSet = this.getIndex({x:0,y:0,z:0}, usedLOD)
+
+  if(this.updateList[instanceSet.arrayElement]!=true){
       
-    lodChunk.updateLOD(usedLOD, fillRate)
-    lodChunk.updateInstanceData(usedLOD)
-    lodChunk.updateList[instanceSet.arrayElement] = true
+    //this.updateLOD(usedLOD, fillRate)
+    //this.updateInstanceData(usedLOD)
+    this.updateList[instanceSet.arrayElement] = true
+    this.changeList[instanceSet.arrayElement] = true
     //alert("updated")
   }
 
+  this.renderLOD = {...usedLOD};
+
+  return instanceSet
+
   }
   
+}
+
+class ChunkList {
+
+  constructor(chunks, extraSpace = 8.0){
+
+
+    this.chunks = chunks
+    this.offsets = new Array(this.chunks.length)
+
+    let total = 0;
+    for(let i = 0; i< this.chunks.length; i++){
+
+      this.offsets[i] = total;
+      total += this.chunks[i].size.x * this.chunks[i].size.y * this.chunks[i].size.z * extraSpace * 6;
+
+    }
+
+  }
+  writeLODS(position,fillRate,axisScale,distanceScale, rewriteFunc){
+    let LODList = []
+
+    for(let i = 0; i < this.chunks.length; i++){
+
+      let initialLOD = {...this.chunks[i].renderLOD}
+      let instanceSet = this.chunks[i].updateLODSByPosition(position, fillRate, axisScale, distanceScale)
+      if(
+    (initialLOD.x != this.chunks[i].renderLOD.x || 
+    initialLOD.y != this.chunks[i].renderLOD.y ||
+    initialLOD.z != this.chunks[i].renderLOD.z)){
+    
+      rewriteFunc(i, instanceSet.arrayElement)
+      //this.chunks[i].changeList[instanceSet.arrayElement] = false;
+      
+    
+    }
+    LODList.push(instanceSet.arrayElement)
+    }
+
+    return LODList
+
+  }
+
+  encodeDrawCall(LODList, drawFunc){
+
+    for(let i = 0; i<LODList.length; i++){
+
+      drawFunc(i);
+
+    }
+
+  }
+
+
 }
 
 const CHUNK_SIZE = {x:32,y:32,z:32}
@@ -477,6 +552,13 @@ function loadVoxel(x,y,z){
 }
 
 const lodChunk = new LODChunk(CHUNK_SIZE)
+const lodChunk2 = new LODChunk(CHUNK_SIZE)
+const lodChunk3 = new LODChunk(CHUNK_SIZE)
+const lodChunk4 = new LODChunk(CHUNK_SIZE)
+const lodChunk5 = new LODChunk(CHUNK_SIZE)
+const lodChunk6 = new LODChunk(CHUNK_SIZE)
+const lodChunk7 = new LODChunk(CHUNK_SIZE)
+const lodChunk8 = new LODChunk(CHUNK_SIZE)
 
 for (let x = 0; x < CHUNK_SIZE.x; x++) {
   for (let y = 0; y < CHUNK_SIZE.y; y++) {
@@ -484,6 +566,13 @@ for (let x = 0; x < CHUNK_SIZE.x; x++) {
       if (loadVoxel(x,y,z)) {
 
         lodChunk.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk2.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk3.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk4.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk5.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk6.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk7.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
+        lodChunk8.setVoxel({x:x,y:y,z:z},{x:0,y:0,z:0},ISFILLED)
 
 
       }
@@ -491,4 +580,81 @@ for (let x = 0; x < CHUNK_SIZE.x; x++) {
   }
 }
 
-export { lodChunk};
+lodChunk.updateInstanceData({x:0,y:0,z:0})
+
+//alert(lodChunk.instanceArray[0])
+lodChunk2.updateInstanceData({x:0,y:0,z:0})
+lodChunk2.position.x = 32
+
+lodChunk3.updateInstanceData({x:0,y:0,z:0})
+lodChunk3.position.x = 32
+lodChunk3.position.y = 32
+
+lodChunk4.updateInstanceData({x:0,y:0,z:0})
+lodChunk4.position.y = 32
+
+
+//alert(lodChunk.instanceArray[0])
+lodChunk5.updateInstanceData({x:0,y:0,z:0})
+lodChunk5.position.z = 32
+
+lodChunk6.updateInstanceData({x:0,y:0,z:0})
+lodChunk6.position.x = 32
+lodChunk6.position.z = 32
+
+lodChunk7.updateInstanceData({x:0,y:0,z:0})
+lodChunk7.position.x = 32
+lodChunk7.position.y = 32
+lodChunk7.position.z = 32
+
+lodChunk8.updateInstanceData({x:0,y:0,z:0})
+lodChunk8.position.y = 32
+lodChunk8.position.z = 32
+
+const chunkSet = new ChunkList([lodChunk, lodChunk2,lodChunk3,lodChunk4,lodChunk5,lodChunk6,lodChunk7,lodChunk8])
+//const chunkSet = new ChunkList([lodChunk,lodChunk2])
+
+for(let i = 0; i<chunkSet.chunks.length; i++){
+
+  let chunk = chunkSet.chunks[i];
+
+  for(let jx = 0; jx<chunk.LODCount.x; jx++){
+
+    for(let jy = 0; jy<chunk.LODCount.y; jy++){
+
+    for(let jz = 0; jz<chunk.LODCount.z; jz++){
+
+      chunk.updateLOD({x:jx,y:jy,z:jz}, 1/64);
+      chunk.updateInstanceData({x:jx,y:jy,z:jz})
+
+  }
+
+  }
+
+  }
+
+}
+
+lodChunk.lodOffsets[0]=0
+for(let i = 1; i< lodChunk.lodOffsets.length; i++){
+      //lodChunk.lodOffsets[i] = lodChunk.lodOffsets[i - 1] + lodChunk.quadCounts[i-1];
+
+    }
+  
+lodChunk2.lodOffsets[0]=0
+//alert(lodChunk.quadCounts)
+for(let i = 1; i< lodChunk2.lodOffsets.length; i++){
+      //let total = lodChunk2.quadCounts[i]
+      //lodChunk2.lodOffsets[i] = lodChunk2.lodOffsets[i - 1] + lodChunk2.quadCounts[i-1];
+      //lodChunk2.lodOffsets[i] = 0
+
+    }
+
+      //alert(chunkSet.offsets[1])
+      //alert(chunkSet.chunks[0].lodOffsets)
+     //alert(lodChunk.quadCounts[0]*8)
+    
+//alert(lodChunk.lodOffsets)
+//alert(chunkSet.chunks[0].instanceArray[124])
+
+export { lodChunk, lodChunk2, chunkSet};
